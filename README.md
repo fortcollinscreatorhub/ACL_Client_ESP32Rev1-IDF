@@ -6,3 +6,5 @@ This is a stand-alone ESP-IDF program for an Rev 1 ESP32 based board. The purpos
 * "Fail" LED - indicates that an RFID with incorrect acccess rights for the equipment has been detected.
 * Relay output - connected to a transistor that controls a relay connected to the equipment - typically a low voltage signal.
 * "In Range" signal - Unlike the Rev 0 boards, the Rev 1 boards assume an RFID reader that provides an indication that there is a RFID within range.
+
+You will need to install the ESP-IDF first. Directions are here https://docs.espressif.com/projects/esp-idf/en/latest/get-started/index.html
