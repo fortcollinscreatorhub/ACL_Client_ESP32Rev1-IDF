@@ -4,8 +4,9 @@
  *
  * This is a stand-alone program for an ESP32 based board (such as an
  * Adafruit Feather). This program should work on other ESP32 boards. It
- * uses the second UART for communication with a Seeed Studio Grove RFID
- * reader. This is meant to be built under the ESP-IDF toolchain.
+ * uses the second UART for communication with a ID Innovations ID-12LA
+ * or ID-20LA RFID reader. This must be built under the ESP-IDF
+ * toolchain.
  *
  * This sketch will wait for an RFID to be sent by the reader and then
  * validate it with the Creator Hub's ACL server API via WiFi
@@ -38,7 +39,7 @@
 #include "lwip/netdb.h"
 #include "lwip/dns.h"
 
-/* The examples use simple WiFi configuration that you can set via
+/* This uses configurations that you can set via
    'make menuconfig'.
 
    If you'd rather not, just change the below entries to strings with
@@ -51,17 +52,8 @@
 #define API_HOST  CONFIG_API_HOST
 #define API_PORT  CONFIG_API_PORT
 
-// Constants that aren't configurable in menuconfig (yet)
+// list of access points to try
 //
-//#define MOMENTARY
-//#define CACHE_ACL
-
-//#define API_HOST    "10.1.10.145"
-//#define API_HOST    "192.168.1.3"
-//#define API_PORT    "8080"
-#define UNLOCK_TIME 5000
-#define RANGE_CHECK_TIME 100
-
 struct ap_entry {
     char *ssid;
     char *password;
@@ -85,6 +77,11 @@ struct ap_entry ap_list[AP_COUNT] = {
 #endif
 #endif
 };
+
+// Constants that aren't configurable in menuconfig (yet)
+//
+#define UNLOCK_TIME 5000
+#define RANGE_CHECK_TIME 100
 
 // Board-specific constants
 //
@@ -312,6 +309,7 @@ static void initialize_wifi(void) {
     ESP_ERROR_CHECK( esp_event_loop_init(event_handler, NULL) );
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
+    ESP_ERROR_CHECK( esp_wifi_set_ps(WIFI_PS_NONE) );
     ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
 
 
@@ -382,7 +380,7 @@ void initialize_pins (void) {
 
 // Return a single newline-terminated line from a socket
 //
-char recv_buf[64];
+char recv_buf[256];
 char *buf_pos;
 int recv_len;
 int recv_done;
@@ -395,19 +393,28 @@ void read_line_socket_init () {
 int read_line_socket (char *line, int s) {
     int r;
     char c;
+    char *start_line = line;
+    ESP_LOGV(TAG, "read_line_socket: <enter>");
     if (recv_done) {
+        ESP_LOGV(TAG, "read_line_socket: recv_done");
         return (0);
     }
     while (1) {
         if (recv_len == 0) {
             bzero(recv_buf, sizeof(recv_buf));
             r = read(s, recv_buf, sizeof(recv_buf)-1);
+            if (r > 256) {
+                ESP_LOGE(TAG, "read_line_socket: recv_buf overflow!");
+                return (-1);
+            }
             if (r < 0) {
+                ESP_LOGV(TAG, "read_line_socket: recv_len==0, r<0, return 0, line = '%s'", start_line);
                 return (0);
             }
             if (r == 0) {
                 *line = '\0';
                 recv_done = 1;
+                ESP_LOGV(TAG, "read_line_socket: recv_len==0, r==0, recv_done, line = '%s'", start_line);
                 return (buf_pos != recv_buf);
             }
             recv_len = r;
@@ -418,6 +425,7 @@ int read_line_socket (char *line, int s) {
         recv_len--;
         if (c == '\n') {
             *line = '\0';
+            ESP_LOGV(TAG, "read_line_socket: line = '%s'", start_line);
             return (1);
         } else if (c != '\r') {
             *line = c;
@@ -437,6 +445,8 @@ int open_server (int *s, char *path)  {
     };
     struct addrinfo *res;
     struct in_addr *addr;
+
+    ESP_LOGV(TAG, "open_server: path = '%s'", path);
 
     http_code = 0;
     http_code_done = false;
@@ -481,9 +491,9 @@ int open_server (int *s, char *path)  {
     ESP_LOGD(TAG, "... connected");
     freeaddrinfo(res);
 
-    char request[128];
-    sprintf(request, "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: esp-idf/1.0 esp32\r\n\r\n", path, API_HOST);
-
+    char request[256];
+    sprintf(request, "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: esp-idf/1.0 esp32\r\n\r\n", path, API_HOST);
+    ESP_LOGV(TAG, "request = '%s'", request);
 
     if (write(*s, request, strlen(request)) < 0) {
         ESP_LOGE(TAG, "... socket send failed");
@@ -516,8 +526,9 @@ int read_server (char *body, int s) {
 
     /* Read HTTP response */
     body[0] = '\0';
-    char line[64];
+    char line[256];
     int r;
+    bzero(line, sizeof(line));
     while ((r = read_line_socket (line, s)) > 0) {
         ESP_LOGV(TAG, "Socket data = '%s'", line);
         if (strlen(line) == 0) {
@@ -587,8 +598,8 @@ int read_acl () {
     acl_loaded = false;
 
     int s;
-    char path[128];
-    char response[128];
+    char path[256];
+    char response[256];
     sprintf(path, "/api/get-acl-0/%s", ACL);
     if (open_server (&s, path) != 0) {
         ESP_LOGI(TAG, "http open failed");
@@ -686,8 +697,8 @@ int query_rfid (unsigned long rfid, int update_cache) {
     ESP_LOGI (TAG, "Querying the server (to log)...");
 
     int s;
-    char path[128];
-    char response[128];
+    char path[256];
+    char response[256];
     sprintf(path, "/api/check-access-0/%s/%lu", ACL, rfid);
     if (open_server (&s, path) != 0) {
         ESP_LOGE(TAG, "http open failed");
@@ -703,8 +714,11 @@ int query_rfid (unsigned long rfid, int update_cache) {
         ESP_LOGV(TAG, "http response body: %s", response);
         if (strcmp(response,"True") == 0) {
             return (true);
-        } else {
+        } if (strcmp(response,"False") == 0) {
             return (false);
+        } else {
+            ESP_LOGE(TAG, "Bad response from server");
+            blinkit_low(GPIO_OUTPUT_CONNECTED_LED, 7, 250);
         }
     } else {
         ESP_LOGE(TAG, "http read failed");

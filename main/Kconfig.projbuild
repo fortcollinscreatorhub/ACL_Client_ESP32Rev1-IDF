@@ -90,7 +90,7 @@ menu "ACL_Client Configuration"
         default "door"
         help
             ACL name to query. Choices are: small-laser-cutter, medium-laser-cutter
-            big-laser-cutter, sawstop, door, cncrouter
+            big-laser-cutter, sawstop, door, cncrouter, drumsander, jointer, planer, woodlathe
 
     config MOMENTARY
         bool "Momentary Activation"
