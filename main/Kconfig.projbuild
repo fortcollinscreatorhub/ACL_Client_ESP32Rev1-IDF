@@ -106,4 +106,17 @@ menu "ACL_Client Configuration"
             N if you want to disable ACL caching
             Y if you want to enable ACL caching. This allows some toleration of the ACL server becoming unavailable
 
+    config USE_MQTT
+	bool "Send MQTT messages"
+	default "N"
+	help
+	    N if you want to disable sending MQTT messages
+            Y if you want to enable sending MQTT key-on and key-off messages
+
+    config MQTT_BROKER_IP
+        string "MQTT Broker Address"
+        default "10.1.10.218"
+        help
+            Numeric address to server running MQTT broker
+
 endmenu
