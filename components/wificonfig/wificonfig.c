@@ -257,7 +257,7 @@ const char *THIS_HTTP_BODY_MQTT_1 =
     "<fieldset>"
     "<legend><b>MQTT Parameters</b></legend>"
     "<form method=\"get\" action=\"mqtt\">"
-    "<p><b>Host</b><br><input id=\"ho\" value=\""
+    "<p><b>Host (leave blank to disable MQTT)</b><br><input id=\"ho\" value=\""
     ;
 
 const char *THIS_HTTP_BODY_MQTT_2 = 
@@ -647,6 +647,11 @@ static const httpd_uri_t wifi = {
 
 void validate_host (char *val, char *host) {
     unsigned int byte[4];
+    if (strcmp (val, "") == 0) {
+        // need to disable MQTT
+        strcpy (host, "");
+        return;
+    }
     if (sscanf (val, "%u.%u.%u.%u", &(byte[0]), &(byte[1]), &(byte[2]), &(byte[3])) == 4) {
         if ((byte[0] <= 255) &&
             (byte[1] <= 255) &&

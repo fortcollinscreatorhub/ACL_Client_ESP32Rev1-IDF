@@ -125,6 +125,8 @@ static void load_aps (void) {
 
 const char *TAG = "ACL_Client";
 
+static int access_state = false;
+
 void blinkit_high(int pin, int count, int wait){
     for (int i=count; i>0; i--) {
         gpio_set_level (pin, 1);
@@ -324,9 +326,12 @@ static void initialize_wifi (void) {
     ESP_ERROR_CHECK( esp_wifi_start() );
 }
 
-static esp_mqtt_client_handle_t mqtt_client;
+static esp_mqtt_client_handle_t mqtt_client = NULL;
 
 static void publish_status (char *subtopic, int val) {
+    if (mqtt_client == NULL) {
+        return;
+    }
     char topic[128];
     sprintf (topic, "stat/%s/%s", wificonfig_vals_mqtt.topic, subtopic);
     int msg_id = esp_mqtt_client_publish(mqtt_client, topic, val ? "ON" : "OFF", 0, 1, 0);
@@ -365,6 +370,11 @@ static void initialize_mqtt () {
 
     char uri[128];
 
+    mqtt_client = NULL;
+    if (strcmp (wificonfig_vals_mqtt.host, "") == 0) {
+        return;
+    }
+
     sprintf (uri, "mqtt://%s", wificonfig_vals_mqtt.host);
 
     esp_mqtt_client_config_t mqtt_cfg = {
@@ -382,8 +392,10 @@ static void initialize_mqtt () {
 
 
     mqtt_client = esp_mqtt_client_init (&mqtt_cfg);
-    esp_mqtt_client_register_event (mqtt_client, ESP_EVENT_ANY_ID, mqtt_event_handler, mqtt_client);
-    esp_mqtt_client_start (mqtt_client);
+    if (mqtt_client != NULL) {
+        esp_mqtt_client_register_event (mqtt_client, ESP_EVENT_ANY_ID, mqtt_event_handler, mqtt_client);
+        esp_mqtt_client_start (mqtt_client);
+    }
 }
 
 
@@ -863,6 +875,8 @@ static void rfid_main_loop (void *pvParameters)
         }
     }
 
+    access_state = 0;
+
     while(1) {
 
         // see if data is coming from RFID reader
@@ -886,6 +900,8 @@ static void rfid_main_loop (void *pvParameters)
 
             if (result == 1) {
                 good_rfid_sequence();
+                access_state = 1;
+                publish_status ("ACCESS", 1);
 
                 // We used the cache, go to the server to recache and log
                 if (used_cache) {
@@ -897,6 +913,8 @@ static void rfid_main_loop (void *pvParameters)
                     vTaskDelay(wificonfig_vals_rfid.mtime * 1000 / portTICK_RATE_MS);
                     ESP_LOGI (TAG, "Turning off relay power");
                     no_rfid_sequence();
+                    access_state = 0;
+                    publish_status ("ACCESS", 0);
                 } else {
                     // wait for IN_RANGE signal to drop
                     while (gpio_get_level(GPIO_INPUT_IN_RANGE)) {
@@ -905,6 +923,8 @@ static void rfid_main_loop (void *pvParameters)
                     ESP_LOGI (TAG, "In Range signal dropped");
                     ESP_LOGI (TAG, "Turning off relay power and logging");
                     no_rfid_sequence();
+                    access_state = 0;
+                    publish_status ("ACCESS", 0);
                     query_rfid(0, false);
                 }
 
@@ -927,6 +947,23 @@ static void rfid_main_loop (void *pvParameters)
        // chill for 100 mSec
        //
        vTaskDelay(100 / portTICK_RATE_MS);
+    }
+}
+
+// send periodic updates
+//
+static void update_loop (void *pvParameters) {
+
+    while (1) {
+        if (wificonfig_vals_mqtt.update != 0) {
+            if (access_state) {
+                publish_status ("ACCESS", access_state);
+                vTaskDelay((60000 * wificonfig_vals_mqtt.update) / portTICK_RATE_MS);
+            }
+        } else {
+         // paranoia (should never get here)
+         vTaskDelay(60000 / portTICK_RATE_MS);
+        }
     }
 }
 
@@ -956,4 +993,9 @@ void app_main()
     initialize_mqtt();
 
     xTaskCreate(&rfid_main_loop, "rfid_main_loop", 4096, NULL, 5, NULL);
+
+    if ((mqtt_client != NULL) && (wificonfig_vals_mqtt.update != 0)) {
+        xTaskCreate(&update_loop, "update_loop", 4096, NULL, 5, NULL);
+    }
+
 }
