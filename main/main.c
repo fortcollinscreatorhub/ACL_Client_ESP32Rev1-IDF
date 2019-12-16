@@ -26,9 +26,9 @@
 #include "freertos/event_groups.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
-#include "esp_event_loop.h"
+#include "esp_event.h"
 #include "esp_log.h"
-#include "nvs_flash.h"
+#include "mqtt_client.h"
 
 #include "driver/uart.h"
 #include "driver/gpio.h"
@@ -39,6 +39,8 @@
 #include "lwip/netdb.h"
 #include "lwip/dns.h"
 
+#include "wificonfig.h"
+
 /* This uses configurations that you can set via
    'make menuconfig'.
 
@@ -46,41 +48,8 @@
    the config you want - ie #define WIFI_SSID "mywifissid"
 */
 
-#define ACL CONFIG_ACL
-#define MOMENTARY CONFIG_MOMENTARY
-#define CACHE_ACL CONFIG_CACHE_ACL
-#define API_HOST  CONFIG_API_HOST
-#define API_PORT  CONFIG_API_PORT
-
-// list of access points to try
+// Constants that aren't configurable (yet)
 //
-struct ap_entry {
-    char *ssid;
-    char *password;
-};
-
-#define AP_COUNT CONFIG_WIFI_AP_COUNT
-struct ap_entry ap_list[AP_COUNT] = {
-#ifdef CONFIG_WIFI_AP1
-      {.ssid = CONFIG_WIFI_AP1_SSID, .password = CONFIG_WIFI_AP1_PASSWORD}
-#ifdef CONFIG_WIFI_AP2
-    , {.ssid = CONFIG_WIFI_AP2_SSID, .password = CONFIG_WIFI_AP2_PASSWORD}
-#ifdef CONFIG_WIFI_AP3
-    , {.ssid = CONFIG_WIFI_AP3_SSID, .password = CONFIG_WIFI_AP3_PASSWORD}
-#ifdef CONFIG_WIFI_AP4
-    , {.ssid = CONFIG_WIFI_AP4_SSID, .password = CONFIG_WIFI_AP4_PASSWORD}
-#ifdef CONFIG_WIFI_AP5
-    , {.ssid = CONFIG_WIFI_AP5_SSID, .password = CONFIG_WIFI_AP5_PASSWORD}
-#endif
-#endif
-#endif
-#endif
-#endif
-};
-
-// Constants that aren't configurable in menuconfig (yet)
-//
-#define UNLOCK_TIME 5000
 #define RANGE_CHECK_TIME 100
 
 // Board-specific constants
@@ -90,8 +59,9 @@ struct ap_entry ap_list[AP_COUNT] = {
 #define RFID_RTS  (UART_PIN_NO_CHANGE)
 #define RFID_CTS  (UART_PIN_NO_CHANGE)
 
+#define GPIO_INPUT_GPIO0          0
 #define GPIO_INPUT_IN_RANGE       4
-#define GPIO_INPUT_PIN_SEL (1ULL<<GPIO_INPUT_IN_RANGE)
+#define GPIO_INPUT_PIN_SEL (1ULL<<GPIO_INPUT_GPIO0 | 1ULL<<GPIO_INPUT_IN_RANGE)
 
 #define GPIO_OUTPUT_RELAY_POWER   14
 #define GPIO_OUTPUT_CONNECTED_LED 25
@@ -111,7 +81,49 @@ const int CONNECTED_BIT = BIT0;
 
 uint8_t *read_data; // storage for UART read
 
-static const char *TAG = "ACL_Client";
+
+// list of access points to try
+//
+
+struct ap_entry {
+    char *ssid;
+    char *password;
+};
+struct ap_entry *ap_list = NULL;
+int ap_count = 0;
+int ap_idx = 0;
+
+// load AP credentials into list from wifi configuration structure
+static void load_aps (void) {
+    // first, find number of APs
+    if (strlen(wificonfig_vals_wifi.ap1_ssid) > 0) ap_count++;
+    if (strlen(wificonfig_vals_wifi.ap2_ssid) > 0) ap_count++;
+    if (strlen(wificonfig_vals_wifi.ap3_ssid) > 0) ap_count++;
+    if (strlen(wificonfig_vals_wifi.ap4_ssid) > 0) ap_count++;
+
+    if (ap_count > 0)
+        ap_list = malloc (sizeof(struct ap_entry) * ap_count);
+
+    ap_idx = 0;
+    if (strlen(wificonfig_vals_wifi.ap1_ssid) > 0) {
+       ap_list[ap_idx].ssid = wificonfig_vals_wifi.ap1_ssid;
+       ap_list[ap_idx++].password = wificonfig_vals_wifi.ap1_pswd;
+    }
+    if (strlen(wificonfig_vals_wifi.ap2_ssid) > 0) {
+       ap_list[ap_idx].ssid = wificonfig_vals_wifi.ap2_ssid;
+       ap_list[ap_idx++].password = wificonfig_vals_wifi.ap2_pswd;
+    }
+    if (strlen(wificonfig_vals_wifi.ap3_ssid) > 0) {
+       ap_list[ap_idx].ssid = wificonfig_vals_wifi.ap3_ssid;
+       ap_list[ap_idx++].password = wificonfig_vals_wifi.ap3_pswd;
+    }
+    if (strlen(wificonfig_vals_wifi.ap4_ssid) > 0) {
+       ap_list[ap_idx].ssid = wificonfig_vals_wifi.ap4_ssid;
+       ap_list[ap_idx++].password = wificonfig_vals_wifi.ap4_pswd;
+    }
+}
+
+const char *TAG = "ACL_Client";
 
 void blinkit_high(int pin, int count, int wait){
     for (int i=count; i>0; i--) {
@@ -241,19 +253,15 @@ int get_RFID (unsigned long *rfid) {
     return (found);
 }
 
-int ap_idx = 0;
-
-static esp_err_t event_handler(void *ctx, system_event_t *event)
+static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
-    switch(event->event_id) {
-    case SYSTEM_EVENT_STA_START:
+    ESP_LOGI(TAG, "event_handler: Event dispatched from event loop base=%s, event_id=%d", event_base, event_id);
+
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, wificonfig_vals_wifi.hostname);
         esp_wifi_connect();
-        break;
-    case SYSTEM_EVENT_STA_GOT_IP:
-        gpio_set_level(GPIO_OUTPUT_CONNECTED_LED, 1);
-        xEventGroupSetBits(wifi_event_group, CONNECTED_BIT);
-        break;
-    case SYSTEM_EVENT_STA_DISCONNECTED:
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        ESP_LOGI(TAG, "Got disconnected");
         /* This is a workaround as ESP32 WiFi libs don't currently
            auto-reassociate. */
         gpio_set_level(GPIO_OUTPUT_CONNECTED_LED, 0);
@@ -261,7 +269,7 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
 
         // connect to next AP on list
         ap_idx++;
-        if (ap_idx >= AP_COUNT) {
+        if (ap_idx >= ap_count) {
             ap_idx = 0;
         }
         wifi_config_t wifi_config = {
@@ -277,12 +285,108 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
         ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
         ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
         ESP_ERROR_CHECK( esp_wifi_connect() );
-        break;
-    default:
-        break;
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        gpio_set_level(GPIO_OUTPUT_CONNECTED_LED, 1);
+        xEventGroupSetBits(wifi_event_group, CONNECTED_BIT);
     }
-    return ESP_OK;
 }
+
+
+static void initialize_wifi (void) {
+    esp_netif_init();
+    wifi_event_group = xEventGroupCreate();
+
+    esp_netif_create_default_wifi_sta();
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
+
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL));
+
+    ESP_ERROR_CHECK( esp_wifi_set_ps(WIFI_PS_NONE) );
+    ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
+
+    wifi_config_t wifi_config = {
+        .sta = {
+            .ssid = "",
+            .password = "",
+        },
+    };
+
+    ap_idx = 0;
+    strncpy((char *)wifi_config.sta.ssid, (char *)ap_list[ap_idx].ssid, 32);
+    strncpy((char *)wifi_config.sta.password, (char *)ap_list[ap_idx].password, 64);
+
+    ESP_LOGI(TAG, "Setting WiFi configuration SSID '%s'...", wifi_config.sta.ssid);
+    ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
+    ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
+    ESP_ERROR_CHECK( esp_wifi_start() );
+}
+
+static esp_mqtt_client_handle_t mqtt_client;
+
+static void publish_status (char *subtopic, int val) {
+    char topic[128];
+    sprintf (topic, "stat/%s/%s", wificonfig_vals_mqtt.topic, subtopic);
+    int msg_id = esp_mqtt_client_publish(mqtt_client, topic, val ? "ON" : "OFF", 0, 1, 0);
+    ESP_LOGI(TAG, "publish successful, msg_id=%d", msg_id);
+}
+
+static void mqtt_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
+    ESP_LOGD(TAG, "mqtt_event_handler: Event dispatched from event loop base=%s, event_id=%d", event_base, event_id);
+
+    esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t) event_data;
+
+    switch (event_id) {
+        case MQTT_EVENT_CONNECTED:
+            ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
+            // subscriptions would go here, but not needed for RFID reader
+            break;
+
+        case MQTT_EVENT_SUBSCRIBED:
+            ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
+            break;
+
+        case MQTT_EVENT_DATA:
+            ESP_LOGI(TAG, "MQTT_EVENT_DATA");
+            ESP_LOGI(TAG, "TOPIC=%.*s", event->topic_len, event->topic);
+            ESP_LOGI(TAG, "DATA=%.*s", event->data_len, event->data);
+            break;
+
+        default:
+            ESP_LOGD(TAG, "Other event id:%d", event_id);
+            break;
+    }
+}
+
+
+static void initialize_mqtt () {
+
+    char uri[128];
+
+    sprintf (uri, "mqtt://%s", wificonfig_vals_mqtt.host);
+
+    esp_mqtt_client_config_t mqtt_cfg = {
+        .uri = uri,
+        .port = wificonfig_vals_mqtt.port,
+        .client_id = wificonfig_vals_mqtt.client,
+        .username = wificonfig_vals_mqtt.user,
+        .password = wificonfig_vals_mqtt.pswd,
+    };
+
+    // wait for Wifi connection
+    while ((xEventGroupGetBits (wifi_event_group) & CONNECTED_BIT) == 0) {
+        vTaskDelay(100 / portTICK_RATE_MS);
+    }
+
+
+    mqtt_client = esp_mqtt_client_init (&mqtt_cfg);
+    esp_mqtt_client_register_event (mqtt_client, ESP_EVENT_ANY_ID, mqtt_event_handler, mqtt_client);
+    esp_mqtt_client_start (mqtt_client);
+}
+
+
 
 static void initialize_uart(void) {
     /* Configure parameters of an UART driver,
@@ -300,32 +404,6 @@ static void initialize_uart(void) {
 
     // Configure a temporary buffer for the incoming data
     read_data = (uint8_t *) malloc(BUF_SIZE);
-}
-
-static void initialize_wifi(void) {
-    ap_idx = 0;
-    tcpip_adapter_init();
-    wifi_event_group = xEventGroupCreate();
-    ESP_ERROR_CHECK( esp_event_loop_init(event_handler, NULL) );
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
-    ESP_ERROR_CHECK( esp_wifi_set_ps(WIFI_PS_NONE) );
-    ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
-
-
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = "",
-            .password = "",
-        },
-    };
-    strncpy((char *)wifi_config.sta.ssid, (char *)ap_list[ap_idx].ssid, 32);
-    strncpy((char *)wifi_config.sta.password, (char *)ap_list[ap_idx].password, 64);
-
-    ESP_LOGI(TAG, "Setting WiFi configuration SSID '%s'...", wifi_config.sta.ssid);
-    ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
-    ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
-    ESP_ERROR_CHECK( esp_wifi_start() );
 }
 
 void initialize_pins (void) {
@@ -377,6 +455,43 @@ void initialize_pins (void) {
     gpio_set_level(GPIO_OUTPUT_ACCESS_LED, 0);
     gpio_set_level(GPIO_OUTPUT_FAIL_LED, 0);
 }
+
+static void strobe_leds (void *pvParameters) {
+    while (1) {
+        gpio_set_level(GPIO_OUTPUT_CONNECTED_LED, 1);
+        vTaskDelay(200 / portTICK_RATE_MS);
+        gpio_set_level(GPIO_OUTPUT_CONNECTED_LED, 0);
+        gpio_set_level(GPIO_OUTPUT_ACCESS_LED, 1);
+        vTaskDelay(200 / portTICK_RATE_MS);
+        gpio_set_level(GPIO_OUTPUT_ACCESS_LED, 0);
+        gpio_set_level(GPIO_OUTPUT_FAIL_LED, 1);
+        vTaskDelay(200 / portTICK_RATE_MS);
+        gpio_set_level(GPIO_OUTPUT_FAIL_LED, 0);
+        vTaskDelay(200 / portTICK_RATE_MS);
+    }
+}
+
+static void check_gpio0 (void *pvParameters) {
+    int last_level = 1;
+    int64_t pressed_time = 0;
+    while (1) {
+        int new_level = gpio_get_level(GPIO_INPUT_GPIO0);
+        if (new_level != last_level) {
+            int64_t curr_time = esp_timer_get_time ();
+            if (new_level == 1) {
+                int64_t curr_time = esp_timer_get_time ();
+                if ((curr_time - pressed_time) > 3000000) {
+                    trigger_wificonfig();
+                }
+            } else {
+                pressed_time = curr_time;
+            }
+        }
+        last_level = new_level;
+        vTaskDelay(100 / portTICK_RATE_MS);
+    }
+}
+
 
 // Return a single newline-terminated line from a socket
 //
@@ -459,7 +574,9 @@ int open_server (int *s, char *path)  {
     }
     gpio_set_level(GPIO_OUTPUT_CONNECTED_LED, 1);
 
-    int err = getaddrinfo(API_HOST, API_PORT, &hints, &res);
+    char port_str[80];
+    sprintf (port_str, "%u", wificonfig_vals_rfid.port);
+    int err = getaddrinfo(wificonfig_vals_rfid.host, port_str, &hints, &res);
 
     if (err != 0 || res == NULL) {
         ESP_LOGE(TAG, "DNS lookup failed err=%d res=%p", err, res);
@@ -492,7 +609,7 @@ int open_server (int *s, char *path)  {
     freeaddrinfo(res);
 
     char request[256];
-    sprintf(request, "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: esp-idf/1.0 esp32\r\n\r\n", path, API_HOST);
+    sprintf(request, "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: esp-idf/1.0 esp32\r\n\r\n", path, wificonfig_vals_rfid.host);
     ESP_LOGV(TAG, "request = '%s'", request);
 
     if (write(*s, request, strlen(request)) < 0) {
@@ -600,7 +717,7 @@ int read_acl () {
     int s;
     char path[256];
     char response[256];
-    sprintf(path, "/api/get-acl-0/%s", ACL);
+    sprintf(path, "/api/get-acl-0/%s", wificonfig_vals_rfid.acl);
     if (open_server (&s, path) != 0) {
         ESP_LOGI(TAG, "http open failed");
         blinkit_low(GPIO_OUTPUT_CONNECTED_LED, 5, 250);
@@ -680,26 +797,26 @@ int query_rfid (unsigned long rfid, int update_cache) {
         return (-1);
     }
 
-#if CACHE_ACL
+    if (wificonfig_vals_rfid.cache) {
+        // Cached
 
-    // always load ACL cache when we can since we don't know when the list will change
-    //
-    if (update_cache) {
-        int server_up = read_acl();
-        if (!server_up) {
-            ESP_LOGE (TAG, "Server failure");
-            return(-1);
+        // always load ACL cache when we can since we don't know when the list will change
+        //
+        if (update_cache) {
+            int server_up = read_acl();
+            if (!server_up) {
+                ESP_LOGE (TAG, "Server failure");
+                return(-1);
+            }
         }
     }
-
-#endif // CACHE_ACL
 
     ESP_LOGI (TAG, "Querying the server (to log)...");
 
     int s;
     char path[256];
     char response[256];
-    sprintf(path, "/api/check-access-0/%s/%lu", ACL, rfid);
+    sprintf(path, "/api/check-access-0/%s/%lu", wificonfig_vals_rfid.acl, rfid);
     if (open_server (&s, path) != 0) {
         ESP_LOGE(TAG, "http open failed");
         blinkit_low(GPIO_OUTPUT_CONNECTED_LED, 5, 250);
@@ -740,11 +857,11 @@ static void rfid_main_loop (void *pvParameters)
     xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT,
                         false, true, portMAX_DELAY);
     ESP_LOGI(TAG, "Connected to AP");
-#if CACHE_ACL
-    if (!read_acl()) {
-        ESP_LOGE (TAG, "Server failure");
+    if (wificonfig_vals_rfid.cache) {
+        if (!read_acl()) {
+            ESP_LOGE (TAG, "Server failure");
+        }
     }
-#endif
 
     while(1) {
 
@@ -753,16 +870,19 @@ static void rfid_main_loop (void *pvParameters)
         if (get_RFID(&cardno))  {
             ESP_LOGI(TAG, "cardno = %lu", cardno);
             int used_cache = false;
-#if CACHE_ACL
-            if (acl_loaded && ((result = query_rfid_cache (cardno)) >= 0)) {
-                used_cache = true;
+
+            if (wificonfig_vals_rfid.cache) {
+                // Cache
+                if (acl_loaded && ((result = query_rfid_cache (cardno)) >= 0)) {
+                    used_cache = true;
+                } else {
+                    result = query_rfid (cardno, true);
+                    used_cache = false;
+                }
             } else {
-                result = query_rfid (cardno, true);
-                used_cache = false;
+                // No Cache
+                result = query_rfid (cardno, false);
             }
-#else
-            result = query_rfid (cardno, false);
-#endif // CACHE_ACL
 
             if (result == 1) {
                 good_rfid_sequence();
@@ -772,20 +892,21 @@ static void rfid_main_loop (void *pvParameters)
                     query_rfid (cardno, true);
                 }
 
-#if MOMENTARY
-                vTaskDelay(UNLOCK_TIME / portTICK_RATE_MS);
-                ESP_LOGI (TAG, "Turning off relay power");
-                no_rfid_sequence();
-#else // NOT MOMENTARY
-                // wait for IN_RANGE signal to drop
-                while (gpio_get_level(GPIO_INPUT_IN_RANGE)) {
-                    vTaskDelay(RANGE_CHECK_TIME / portTICK_RATE_MS);
+                if (wificonfig_vals_rfid.moment) {
+                    // Momentary
+                    vTaskDelay(wificonfig_vals_rfid.mtime * 1000 / portTICK_RATE_MS);
+                    ESP_LOGI (TAG, "Turning off relay power");
+                    no_rfid_sequence();
+                } else {
+                    // wait for IN_RANGE signal to drop
+                    while (gpio_get_level(GPIO_INPUT_IN_RANGE)) {
+                        vTaskDelay(RANGE_CHECK_TIME / portTICK_RATE_MS);
+                    }
+                    ESP_LOGI (TAG, "In Range signal dropped");
+                    ESP_LOGI (TAG, "Turning off relay power and logging");
+                    no_rfid_sequence();
+                    query_rfid(0, false);
                 }
-                ESP_LOGI (TAG, "In Range signal dropped");
-                ESP_LOGI (TAG, "Turning off relay power and logging");
-                no_rfid_sequence();
-                query_rfid(0, false);
-#endif
 
                 // eat any card reads that happened when door was unlocked
                 //
@@ -812,9 +933,27 @@ static void rfid_main_loop (void *pvParameters)
 
 void app_main()
 {
-    ESP_ERROR_CHECK( nvs_flash_init() );
     initialize_uart();
-    initialize_wifi();
     initialize_pins();
+
+    // tasks related to wifi-based configuration
+    TaskHandle_t xBlinkHandle = NULL;
+    xTaskCreate(&strobe_leds, "strobe_leds", 4096, NULL, 5, &xBlinkHandle);
+    wificonfig();
+    if (xBlinkHandle != NULL) {
+        vTaskDelete (xBlinkHandle);
+        gpio_set_level(GPIO_OUTPUT_CONNECTED_LED, 0);
+        gpio_set_level(GPIO_OUTPUT_ACCESS_LED, 0);
+        gpio_set_level(GPIO_OUTPUT_FAIL_LED, 0);
+    }
+    load_aps();
+    xTaskCreate(&check_gpio0, "check_gpio0", 4096, NULL, 5, NULL);
+
+    ESP_ERROR_CHECK( esp_event_loop_create_default() );
+
+
+    initialize_wifi();
+    initialize_mqtt();
+
     xTaskCreate(&rfid_main_loop, "rfid_main_loop", 4096, NULL, 5, NULL);
 }

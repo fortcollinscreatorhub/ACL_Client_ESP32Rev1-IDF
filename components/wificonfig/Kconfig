@@ -1,0 +1,16 @@
+menu "wifi configuration"
+
+    config WIFI_MODULE_NAME
+        string "Module name to display on configuration web pages"
+        default "Module"
+        help
+            Name of module to be displayed in wifi configuration pages
+
+    config WIFI_PAGE_TITLE
+        string "Page title to display on configuration web pages"
+        default "Page Title"
+        help
+            Title for wifi configuration pages
+            
+
+endmenu
