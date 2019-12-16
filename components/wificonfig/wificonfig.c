@@ -795,14 +795,16 @@ static esp_err_t rfid_get_handler(httpd_req_t *req)
     httpd_resp_send_chunk (req, THIS_HTTP_BODY_RFID_0, strlen(THIS_HTTP_BODY_RFID_0));
 
     httpd_resp_send_chunk (req, THIS_HTTP_BODY_RFID_1, strlen(THIS_HTTP_BODY_RFID_1));
-    httpd_resp_send_chunk (req, wificonfig_vals_rfid.acl, strlen(wificonfig_vals_rfid.acl));
+    if (strlen(wificonfig_vals_rfid.acl) > 0)
+    	httpd_resp_send_chunk (req, wificonfig_vals_rfid.acl, strlen(wificonfig_vals_rfid.acl));
 
     httpd_resp_send_chunk (req, THIS_HTTP_BODY_RFID_2, strlen(THIS_HTTP_BODY_RFID_2));
     sprintf (num_str, "%u", wificonfig_vals_rfid.uniq);
     httpd_resp_send_chunk (req, num_str, strlen(num_str));
 
-    httpd_resp_send_chunk (req, THIS_HTTP_BODY_RFID_3, strlen(THIS_HTTP_BODY_RFID_3));
-    httpd_resp_send_chunk (req, wificonfig_vals_rfid.host, strlen(wificonfig_vals_rfid.host));
+   httpd_resp_send_chunk (req, THIS_HTTP_BODY_RFID_3, strlen(THIS_HTTP_BODY_RFID_3));
+   if (strlen(wificonfig_vals_rfid.host) > 0)
+    	httpd_resp_send_chunk (req, wificonfig_vals_rfid.host, strlen(wificonfig_vals_rfid.host));
 
     httpd_resp_send_chunk (req, THIS_HTTP_BODY_RFID_4, strlen(THIS_HTTP_BODY_RFID_4));
     sprintf (num_str, "%u", wificonfig_vals_rfid.port);
