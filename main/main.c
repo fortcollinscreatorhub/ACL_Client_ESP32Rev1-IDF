@@ -261,7 +261,7 @@ static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_
 
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, wificonfig_vals_wifi.hostname);
-        esp_wifi_connect();
+        ESP_ERROR_CHECK(esp_wifi_connect());
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         ESP_LOGI(TAG, "Got disconnected");
         /* This is a workaround as ESP32 WiFi libs don't currently
@@ -393,8 +393,8 @@ static void initialize_mqtt () {
 
     mqtt_client = esp_mqtt_client_init (&mqtt_cfg);
     if (mqtt_client != NULL) {
-        esp_mqtt_client_register_event (mqtt_client, ESP_EVENT_ANY_ID, mqtt_event_handler, mqtt_client);
-        esp_mqtt_client_start (mqtt_client);
+        ESP_ERROR_CHECK(esp_mqtt_client_register_event (mqtt_client, ESP_EVENT_ANY_ID, mqtt_event_handler, mqtt_client));
+        ESP_ERROR_CHECK(esp_mqtt_client_start (mqtt_client));
     }
 }
 
@@ -678,6 +678,7 @@ int read_server (char *body, int s) {
         return (-1);
     }
 
+    ESP_LOGI(TAG, "Done reading");
     return (0);
 }
 
@@ -838,6 +839,7 @@ int query_rfid (unsigned long rfid, int update_cache) {
     //
     int err = read_server (response, s);
     ESP_LOGD(TAG, "... done reading from socket.");
+    ESP_LOGI(TAG, "response='%s'", response);
     close(s);
     if (err >= 0) {
         ESP_LOGV(TAG, "http response body: %s", response);
@@ -956,13 +958,11 @@ static void update_loop (void *pvParameters) {
 
     while (1) {
         if (wificonfig_vals_mqtt.update != 0) {
-            if (access_state) {
-                publish_status ("ACCESS", access_state);
-                vTaskDelay((60000 * wificonfig_vals_mqtt.update) / portTICK_RATE_MS);
-            }
+            publish_status ("ACCESS", access_state);
+            vTaskDelay((60000 * wificonfig_vals_mqtt.update) / portTICK_RATE_MS);
         } else {
-         // paranoia (should never get here)
-         vTaskDelay(60000 / portTICK_RATE_MS);
+            // paranoia (should never get here)
+            vTaskDelay(60000 / portTICK_RATE_MS);
         }
     }
 }
@@ -984,6 +984,11 @@ void app_main()
         gpio_set_level(GPIO_OUTPUT_FAIL_LED, 0);
     }
     load_aps();
+    if (ap_count == 0) {
+        // if no valid ssids -> go back to config mode
+        ESP_LOGI (TAG, "Whoa! No ssids configured");
+        trigger_wificonfig();
+    }
     xTaskCreate(&check_gpio0, "check_gpio0", 4096, NULL, 5, NULL);
 
     ESP_ERROR_CHECK( esp_event_loop_create_default() );

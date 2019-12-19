@@ -118,12 +118,21 @@ const char *THIS_HTTP_HOME_SCRIPT =
 const char *THIS_HTTP_WIFI_SCRIPT =
     "<script>"
     "function eb(s){return document.getElementById(s);}"
+    "function sp(i){eb(i).type=(eb(i).type==='text'?'password':'text');}"
     "function c(l){"
         "eb('s1').value=l.innerText||l.textContent;"
         "eb('p1').focus();"
         "}"
     "</script>"
     ;
+
+const char *THIS_HTTP_MQTT_SCRIPT =
+    "<script>"
+    "function eb(s){return document.getElementById(s);}"
+    "function sp(i){eb(i).type=(eb(i).type==='text'?'password':'text');}"
+    "</script>"
+    ;
+
 
 const char *THIS_HTTP_HEAD_START =
     "<!DOCTYPE html>"
@@ -199,7 +208,7 @@ const char *THIS_HTTP_BODY_WIFI_1 =
 
 const char *THIS_HTTP_BODY_WIFI_2 = 
     "\" name=\"s1\"></p>"
-    "<p><b>AP1 Password</b><br><input id=\"p1\" value=\""
+    "<p><b>AP1 Password</b><input type=\"checkbox\" onclick=\"sp(\'p1\')\" name=""><br><input id=\"p1\" type=\"password\" value=\""
     ;
 
 const char *THIS_HTTP_BODY_WIFI_3 = 
@@ -209,7 +218,7 @@ const char *THIS_HTTP_BODY_WIFI_3 =
 
 const char *THIS_HTTP_BODY_WIFI_4 = 
     "\" name=\"s2\"></p>"
-    "<p><b>AP2 Password</b><br><input id=\"p2\" value=\""
+    "<p><b>AP2 Password</b><input type=\"checkbox\" onclick=\"sp(\'p2\')\" name=""><br><input id=\"p2\" type=\"password\" value=\""
     ;
 
 const char *THIS_HTTP_BODY_WIFI_5 = 
@@ -219,7 +228,7 @@ const char *THIS_HTTP_BODY_WIFI_5 =
 
 const char *THIS_HTTP_BODY_WIFI_6 = 
     "\" name=\"s3\"></p>"
-    "<p><b>AP3 Password</b><br><input id=\"p3\" value=\""
+    "<p><b>AP3 Password</b><input type=\"checkbox\" onclick=\"sp(\'p3\')\" name=""><br><input id=\"p3\" type=\"password\" value=\""
     ;
 
 const char *THIS_HTTP_BODY_WIFI_7 = 
@@ -229,7 +238,7 @@ const char *THIS_HTTP_BODY_WIFI_7 =
 
 const char *THIS_HTTP_BODY_WIFI_8 = 
     "\" name=\"s4\"></p>"
-    "<p><b>AP4 Password</b><br><input id=\"p4\" value=\""
+    "<p><b>AP4 Password</b><input type=\"checkbox\" onclick=\"sp(\'p4\')\" name=""><br><input id=\"p4\" type=\"password\" value=\""
     ;
 
 const char *THIS_HTTP_BODY_WIFI_9 = 
@@ -251,6 +260,7 @@ const char *THIS_HTTP_BODY_MQTT_0 =
     "<div style=\"text-align:center;color:#eaeaea;\">"
     "<h3>MQTT Configuration</h3>"
     "<h2>" D_DEVICE "</h2>"
+    "</div>"
     ;
 
 const char *THIS_HTTP_BODY_MQTT_1 = 
@@ -277,7 +287,7 @@ const char *THIS_HTTP_BODY_MQTT_4 =
 
 const char *THIS_HTTP_BODY_MQTT_5 = 
     "\" name=\"us\"></p>"
-    "<p><b>Password</b><br><input id=\"pa\" value=\""
+    "<p><b>Password</b><input type=\"checkbox\" onclick=\"sp(\'pa\')\" name=""><br><input id=\"pa\" type=\"password\" value=\""
     ;
 
 const char *THIS_HTTP_BODY_MQTT_6 = 
@@ -709,6 +719,7 @@ static esp_err_t mqtt_get_handler(httpd_req_t *req)
 
 
     httpd_resp_send_chunk (req, THIS_HTTP_HEAD_START, strlen(THIS_HTTP_HEAD_START));
+    httpd_resp_send_chunk (req, THIS_HTTP_MQTT_SCRIPT, strlen(THIS_HTTP_MQTT_SCRIPT));
     httpd_resp_send_chunk (req, THIS_HTTP_STYLE, strlen(THIS_HTTP_STYLE));
     httpd_resp_send_chunk (req, THIS_HTTP_HEAD_END, strlen(THIS_HTTP_HEAD_END));
     httpd_resp_send_chunk (req, THIS_HTTP_BODY_START, strlen(THIS_HTTP_BODY_START));
