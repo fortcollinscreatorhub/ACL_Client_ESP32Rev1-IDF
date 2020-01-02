@@ -327,9 +327,10 @@ static void initialize_wifi (void) {
 }
 
 static esp_mqtt_client_handle_t mqtt_client = NULL;
+static int mqtt_connected = false;
 
 static void publish_status (char *subtopic, int val) {
-    if (mqtt_client == NULL) {
+    if ((mqtt_client == NULL) || (mqtt_connected)) {
         return;
     }
     char topic[128];
@@ -346,6 +347,7 @@ static void mqtt_event_handler(void* arg, esp_event_base_t event_base, int32_t e
     switch (event_id) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
+            mqtt_connected = true;
             // subscriptions would go here, but not needed for RFID reader
             break;
 
@@ -371,6 +373,7 @@ static void initialize_mqtt () {
     char uri[128];
 
     mqtt_client = NULL;
+    mqtt_connected = false;
     if (strcmp (wificonfig_vals_mqtt.host, "") == 0) {
         return;
     }
