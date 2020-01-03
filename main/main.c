@@ -351,6 +351,11 @@ static void mqtt_event_handler(void* arg, esp_event_base_t event_base, int32_t e
             // subscriptions would go here, but not needed for RFID reader
             break;
 
+        case MQTT_EVENT_DISCONNECTED:
+            ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
+            mqtt_connected = false;
+            break;
+
         case MQTT_EVENT_SUBSCRIBED:
             ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
             break;
