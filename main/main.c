@@ -330,7 +330,7 @@ static esp_mqtt_client_handle_t mqtt_client = NULL;
 static int mqtt_connected = false;
 
 static void publish_status (char *subtopic, int val) {
-    if ((mqtt_client == NULL) || (mqtt_connected)) {
+    if ((mqtt_client == NULL) || (!mqtt_connected)) {
         return;
     }
     char topic[128];
@@ -340,7 +340,7 @@ static void publish_status (char *subtopic, int val) {
 }
 
 static void mqtt_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
-    ESP_LOGD(TAG, "mqtt_event_handler: Event dispatched from event loop base=%s, event_id=%d", event_base, event_id);
+    ESP_LOGI(TAG, "mqtt_event_handler: Event dispatched from event loop base=%s, event_id=%d", event_base, event_id);
 
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t) event_data;
 
@@ -367,7 +367,7 @@ static void mqtt_event_handler(void* arg, esp_event_base_t event_base, int32_t e
             break;
 
         default:
-            ESP_LOGD(TAG, "Other event id:%d", event_id);
+            ESP_LOGI(TAG, "Other event id:%d", event_id);
             break;
     }
 }
@@ -403,6 +403,8 @@ static void initialize_mqtt () {
     if (mqtt_client != NULL) {
         ESP_ERROR_CHECK(esp_mqtt_client_register_event (mqtt_client, ESP_EVENT_ANY_ID, mqtt_event_handler, mqtt_client));
         ESP_ERROR_CHECK(esp_mqtt_client_start (mqtt_client));
+    } else {
+        ESP_LOGE(TAG, "initialize_mqtt: Unable to initialize MQTT client");
     }
 }
 
@@ -589,7 +591,7 @@ int open_server (int *s, char *path)  {
     read_line_socket_init();
 
     if ((xEventGroupGetBits (wifi_event_group) & CONNECTED_BIT) == 0) {
-        ESP_LOGD(TAG, "Not Connected\n");
+        ESP_LOGI(TAG, "Not Connected\n");
         return (-1);
     }
     gpio_set_level(GPIO_OUTPUT_CONNECTED_LED, 1);
