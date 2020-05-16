@@ -968,7 +968,7 @@ static void update_loop (void *pvParameters) {
 
     while (1) {
         if (wificonfig_vals_mqtt.update != 0) {
-            publish_status ("ACCESS", access_state);
+            publish_status ("STATE", access_state);
             vTaskDelay((60000 * wificonfig_vals_mqtt.update) / portTICK_RATE_MS);
         } else {
             // paranoia (should never get here)
