@@ -1101,6 +1101,10 @@ void init_wificonfig(void) {
     esp_base_mac_addr_get(mac);
     uint16_t id = mac[5] + (mac[4]<<8);
 
+    // dump default id
+    ESP_LOGI(TAG, "init_wificonfig: id=0x%x", id);
+
+
     // wifi
     strcpy (wificonfig_vals_wifi.ap1_ssid, "");
     strcpy (wificonfig_vals_wifi.ap1_pswd, "");

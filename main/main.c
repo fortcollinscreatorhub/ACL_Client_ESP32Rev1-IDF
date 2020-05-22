@@ -72,9 +72,12 @@
 static EventGroupHandle_t wifi_event_group;
 
 /* The event group allows multiple bits for each event,
-   but we only care about one event - are we connected
-   to the AP with an IP? */
-const int CONNECTED_BIT = BIT0;
+   but we only care about two events: 
+   1. are we connected to to the AP with an IP?
+   2. are we connected to to the MQTT broker?
+*/
+const int WIFI_CONNECTED_BIT = BIT0;
+const int MQTT_CONNECTED_BIT = BIT1;
 
 
 #define BUF_SIZE (1024)
@@ -267,7 +270,7 @@ static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_
         /* This is a workaround as ESP32 WiFi libs don't currently
            auto-reassociate. */
         gpio_set_level(GPIO_OUTPUT_CONNECTED_LED, 0);
-        xEventGroupClearBits(wifi_event_group, CONNECTED_BIT);
+        xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT);
 
         // connect to next AP on list
         ap_idx++;
@@ -289,7 +292,7 @@ static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_
         ESP_ERROR_CHECK( esp_wifi_connect() );
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         gpio_set_level(GPIO_OUTPUT_CONNECTED_LED, 1);
-        xEventGroupSetBits(wifi_event_group, CONNECTED_BIT);
+        xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
 
@@ -327,11 +330,19 @@ static void initialize_wifi (void) {
 }
 
 static esp_mqtt_client_handle_t mqtt_client = NULL;
-static int mqtt_connected = false;
 
-static void publish_status (char *subtopic, int val) {
-    if ((mqtt_client == NULL) || (!mqtt_connected)) {
+static void publish_status (char *subtopic, int val, bool wait) {
+    if (mqtt_client == NULL) {
         return;
+    }
+    if ((xEventGroupGetBits (wifi_event_group) & MQTT_CONNECTED_BIT) == 0) {
+        if (wait) {
+            ESP_LOGI(TAG, "publish_status: waiting for mqtt connection");
+            xEventGroupWaitBits(wifi_event_group, MQTT_CONNECTED_BIT, false, true, portMAX_DELAY);
+            ESP_LOGI(TAG, "publish_status: mqtt connected");
+        } else {
+            ESP_LOGI(TAG, "publish_status: not connected to mqtt broker (no wait)");
+        }
     }
     char topic[128];
     sprintf (topic, "stat/%s/%s", wificonfig_vals_mqtt.topic, subtopic);
@@ -345,25 +356,37 @@ static void mqtt_event_handler(void* arg, esp_event_base_t event_base, int32_t e
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t) event_data;
 
     switch (event_id) {
+        case MQTT_EVENT_ERROR:
+            ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
+            break;
+
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
-            mqtt_connected = true;
+            xEventGroupSetBits(wifi_event_group, MQTT_CONNECTED_BIT);
             // subscriptions would go here, but not needed for RFID reader
             break;
 
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
-            mqtt_connected = false;
+            xEventGroupClearBits(wifi_event_group, MQTT_CONNECTED_BIT);
             break;
 
         case MQTT_EVENT_SUBSCRIBED:
             ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
             break;
 
+        case MQTT_EVENT_PUBLISHED:
+            ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
+            break;
+
         case MQTT_EVENT_DATA:
             ESP_LOGI(TAG, "MQTT_EVENT_DATA");
             ESP_LOGI(TAG, "TOPIC=%.*s", event->topic_len, event->topic);
             ESP_LOGI(TAG, "DATA=%.*s", event->data_len, event->data);
+            break;
+
+        case MQTT_EVENT_BEFORE_CONNECT:
+            ESP_LOGI(TAG, "MQTT_EVENT_BEFORE_CONNECT");
             break;
 
         default:
@@ -378,7 +401,7 @@ static void initialize_mqtt () {
     char uri[128];
 
     mqtt_client = NULL;
-    mqtt_connected = false;
+    xEventGroupClearBits(wifi_event_group, MQTT_CONNECTED_BIT);
     if (strcmp (wificonfig_vals_mqtt.host, "") == 0) {
         return;
     }
@@ -394,7 +417,7 @@ static void initialize_mqtt () {
     };
 
     // wait for Wifi connection
-    while ((xEventGroupGetBits (wifi_event_group) & CONNECTED_BIT) == 0) {
+    while ((xEventGroupGetBits (wifi_event_group) & WIFI_CONNECTED_BIT) == 0) {
         vTaskDelay(100 / portTICK_RATE_MS);
     }
 
@@ -590,7 +613,7 @@ int open_server (int *s, char *path)  {
     http_header_done = false;
     read_line_socket_init();
 
-    if ((xEventGroupGetBits (wifi_event_group) & CONNECTED_BIT) == 0) {
+    if ((xEventGroupGetBits (wifi_event_group) & WIFI_CONNECTED_BIT) == 0) {
         ESP_LOGI(TAG, "Not Connected\n");
         return (-1);
     }
@@ -814,7 +837,7 @@ int query_rfid_cache (unsigned long rfid) {
 //       -1 if error on request
 int query_rfid (unsigned long rfid, int update_cache) {
 
-    if ((xEventGroupGetBits (wifi_event_group) & CONNECTED_BIT) == 0) {
+    if ((xEventGroupGetBits (wifi_event_group) & WIFI_CONNECTED_BIT) == 0) {
         // If we aren't connected, no point in continuing
         //
         return (-1);
@@ -873,12 +896,12 @@ static void rfid_main_loop (void *pvParameters)
     int result;
     unsigned long cardno;
 
-    // Wait for the callback to set the CONNECTED_BIT in the
+    // Wait for the callback to set the WIFI_CONNECTED_BIT in the
     //    event group.
     //
     // We only do this at startup
     //
-    xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT,
+    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT,
                         false, true, portMAX_DELAY);
     ESP_LOGI(TAG, "Connected to AP");
     if (wificonfig_vals_rfid.cache) {
@@ -913,7 +936,7 @@ static void rfid_main_loop (void *pvParameters)
             if (result == 1) {
                 good_rfid_sequence();
                 access_state = 1;
-                publish_status ("ACCESS", 1);
+                publish_status ("ACCESS", 1, false);
 
                 // We used the cache, go to the server to recache and log
                 if (used_cache) {
@@ -926,7 +949,7 @@ static void rfid_main_loop (void *pvParameters)
                     ESP_LOGI (TAG, "Turning off relay power");
                     no_rfid_sequence();
                     access_state = 0;
-                    publish_status ("ACCESS", 0);
+                    publish_status ("ACCESS", 0, false);
                 } else {
                     // wait for IN_RANGE signal to drop
                     while (gpio_get_level(GPIO_INPUT_IN_RANGE)) {
@@ -936,7 +959,7 @@ static void rfid_main_loop (void *pvParameters)
                     ESP_LOGI (TAG, "Turning off relay power and logging");
                     no_rfid_sequence();
                     access_state = 0;
-                    publish_status ("ACCESS", 0);
+                    publish_status ("ACCESS", 0, false);
                     query_rfid(0, false);
                 }
 
@@ -968,7 +991,7 @@ static void update_loop (void *pvParameters) {
 
     while (1) {
         if (wificonfig_vals_mqtt.update != 0) {
-            publish_status ("STATE", access_state);
+            publish_status ("STATE", access_state, true);
             vTaskDelay((60000 * wificonfig_vals_mqtt.update) / portTICK_RATE_MS);
         } else {
             // paranoia (should never get here)
