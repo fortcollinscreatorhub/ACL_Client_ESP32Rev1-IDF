@@ -258,6 +258,13 @@ int get_RFID (unsigned long *rfid) {
     return (found);
 }
 
+static void next_wifi()
+{
+    ESP_LOGI(TAG, "Disconnecting WiFi to change to next station");
+    ESP_ERROR_CHECK( esp_wifi_disconnect() );
+}
+
+
 static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
     ESP_LOGI(TAG, "event_handler: Event dispatched from event loop base=%s, event_id=%d", event_base, event_id);
@@ -527,6 +534,8 @@ static void check_gpio0 (void *pvParameters) {
                 int64_t curr_time = esp_timer_get_time ();
                 if ((curr_time - pressed_time) > 3000000) {
                     trigger_wificonfig();
+                } else {
+                    next_wifi();
                 }
             } else {
                 pressed_time = curr_time;
