@@ -352,7 +352,10 @@ static void publish_status (char *subtopic, int val, bool wait) {
         }
     }
     char topic[128];
-    sprintf (topic, "stat/%s/%s", wificonfig_vals_mqtt.topic, subtopic);
+    if (wificonfig_vals_rfid.uniq == 0)
+      sprintf (topic, "stat/%s/%s", wificonfig_vals_mqtt.topic, subtopic);
+    else
+      sprintf (topic, "stat/%s-%d/%s", wificonfig_vals_mqtt.topic, wificonfig_vals_rfid.uniq, subtopic);
     int msg_id = esp_mqtt_client_publish(mqtt_client, topic, val ? "ON" : "OFF", 0, 1, 0);
     ESP_LOGI(TAG, "publish successful, msg_id=%d", msg_id);
 }
