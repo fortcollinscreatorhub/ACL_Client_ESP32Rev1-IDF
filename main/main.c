@@ -25,6 +25,7 @@
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -84,6 +85,10 @@ const int MQTT_CONNECTED_BIT = BIT1;
 
 uint8_t *read_data; // storage for UART read
 
+// esp netif object
+esp_netif_t *sta_netif = NULL;
+esp_netif_t *ap_netif = NULL;
+
 
 // list of access points to try
 //
@@ -133,20 +138,20 @@ static int access_state = false;
 void blinkit_high(int pin, int count, int wait){
     for (int i=count; i>0; i--) {
         gpio_set_level (pin, 1);
-        vTaskDelay(wait / portTICK_RATE_MS);
+        vTaskDelay(wait / portTICK_PERIOD_MS);
         gpio_set_level (pin, 0);
         if (i > 1)
-            vTaskDelay(wait / portTICK_RATE_MS);
+            vTaskDelay(wait / portTICK_PERIOD_MS);
     }
 }
 
 void blinkit_low(int pin, int count, int wait){
     for (int i=count; i>0; i--) {
         gpio_set_level (pin, 0);
-        vTaskDelay(wait / portTICK_RATE_MS);
+        vTaskDelay(wait / portTICK_PERIOD_MS);
         gpio_set_level (pin, 1);
         if (i > 1)
-            vTaskDelay(wait / portTICK_RATE_MS);
+            vTaskDelay(wait / portTICK_PERIOD_MS);
   }
 }
 
@@ -204,7 +209,13 @@ int get_RFID (unsigned long *rfid) {
     int reading = false;
     int found = false;
 
-    int len = uart_read_bytes(UART_NUM_1, read_data, BUF_SIZE, 20 / portTICK_RATE_MS);
+    int blen = 0;
+    ESP_ERROR_CHECK(uart_get_buffered_data_len(UART_NUM_1, (size_t*)&blen));
+    if (blen == 0)
+        return(false);
+
+    ESP_LOGV (TAG, "UART data found, length=%d", blen);
+    int len = uart_read_bytes(UART_NUM_1, read_data, BUF_SIZE, 20 / portTICK_PERIOD_MS);
     if (len > 0) {
         ESP_LOGV (TAG, "RFID read length=%d", len);
         //printf ("Raw data: '");
@@ -267,10 +278,9 @@ static void next_wifi()
 
 static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
-    ESP_LOGI(TAG, "event_handler: Event dispatched from event loop base=%s, event_id=%d", event_base, event_id);
+    ESP_LOGI(TAG, "event_handler: Event dispatched from event loop base=%s, event_id=%d", event_base, (int) event_id);
 
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, wificonfig_vals_wifi.hostname);
         ESP_ERROR_CHECK(esp_wifi_connect());
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         ESP_LOGI(TAG, "Got disconnected");
@@ -308,7 +318,7 @@ static void initialize_wifi (void) {
     esp_netif_init();
     wifi_event_group = xEventGroupCreate();
 
-    esp_netif_create_default_wifi_sta();
+    sta_netif = esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
@@ -333,6 +343,8 @@ static void initialize_wifi (void) {
     ESP_LOGI(TAG, "Setting WiFi configuration SSID '%s'...", wifi_config.sta.ssid);
     ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
     ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
+
+    esp_netif_set_hostname(sta_netif, wificonfig_vals_wifi.hostname);
     ESP_ERROR_CHECK( esp_wifi_start() );
 }
 
@@ -361,7 +373,7 @@ static void publish_status (char *subtopic, int val, bool wait) {
 }
 
 static void mqtt_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
-    ESP_LOGI(TAG, "mqtt_event_handler: Event dispatched from event loop base=%s, event_id=%d", event_base, event_id);
+    ESP_LOGI(TAG, "mqtt_event_handler: Event dispatched from event loop base=%s, event_id=%d", event_base, (int) event_id);
 
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t) event_data;
 
@@ -382,11 +394,11 @@ static void mqtt_event_handler(void* arg, esp_event_base_t event_base, int32_t e
             break;
 
         case MQTT_EVENT_SUBSCRIBED:
-            ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
+            ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", (int) event->msg_id);
             break;
 
         case MQTT_EVENT_PUBLISHED:
-            ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
+            ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", (int) event->msg_id);
             break;
 
         case MQTT_EVENT_DATA:
@@ -400,7 +412,7 @@ static void mqtt_event_handler(void* arg, esp_event_base_t event_base, int32_t e
             break;
 
         default:
-            ESP_LOGI(TAG, "Other event id:%d", event_id);
+            ESP_LOGI(TAG, "Other event id:%d", (int) event_id);
             break;
     }
 }
@@ -419,16 +431,16 @@ static void initialize_mqtt () {
     sprintf (uri, "mqtt://%s", wificonfig_vals_mqtt.host);
 
     esp_mqtt_client_config_t mqtt_cfg = {
-        .uri = uri,
-        .port = wificonfig_vals_mqtt.port,
-        .client_id = wificonfig_vals_mqtt.client,
-        .username = wificonfig_vals_mqtt.user,
-        .password = wificonfig_vals_mqtt.pswd,
+        .broker.address.uri = uri,
+        .broker.address.port = wificonfig_vals_mqtt.port,
+        .credentials.client_id = wificonfig_vals_mqtt.client,
+        .credentials.username = wificonfig_vals_mqtt.user,
+        .credentials.authentication.password = wificonfig_vals_mqtt.pswd,
     };
 
     // wait for Wifi connection
     while ((xEventGroupGetBits (wifi_event_group) & WIFI_CONNECTED_BIT) == 0) {
-        vTaskDelay(100 / portTICK_RATE_MS);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
     }
 
 
@@ -447,15 +459,18 @@ static void initialize_uart(void) {
     /* Configure parameters of an UART driver,
      * communication pins and install the driver */
     uart_config_t uart_config = {
-        .baud_rate = 9600,
-        .data_bits = UART_DATA_8_BITS,
-        .parity    = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE
+        .baud_rate  = 9600,
+        .data_bits  = UART_DATA_8_BITS,
+        .parity     = UART_PARITY_DISABLE,
+        .stop_bits  = UART_STOP_BITS_1,
+        .flow_ctrl  = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_DEFAULT
     };
-    uart_param_config(UART_NUM_1, &uart_config);
-    uart_set_pin(UART_NUM_1, RFID_TXD, RFID_RXD, RFID_RTS, RFID_CTS);
-    uart_driver_install(UART_NUM_1, BUF_SIZE * 2, 0, 0, NULL, 0);
+    int intr_alloc_flags = 0;
+
+    ESP_ERROR_CHECK(uart_driver_install(UART_NUM_1, BUF_SIZE * 2, 0, 0, NULL, intr_alloc_flags));
+    ESP_ERROR_CHECK(uart_param_config(UART_NUM_1, &uart_config));
+    ESP_ERROR_CHECK(uart_set_pin(UART_NUM_1, RFID_TXD, RFID_RXD, RFID_RTS, RFID_CTS));
 
     // Configure a temporary buffer for the incoming data
     read_data = (uint8_t *) malloc(BUF_SIZE);
@@ -467,7 +482,7 @@ void initialize_pins (void) {
     // Configure Inputs
 
     //disable interrupt
-    io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
+    io_conf.intr_type = GPIO_INTR_DISABLE;
     //set as output mode
     io_conf.mode = GPIO_MODE_INPUT;
     //bit mask of the pins that you want to set,e.g.GPIO21/32
@@ -483,7 +498,7 @@ void initialize_pins (void) {
     // Configure Outputs
 
     //disable interrupt
-    io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
+    io_conf.intr_type = GPIO_INTR_DISABLE;
     //set as output mode
     io_conf.mode = GPIO_MODE_OUTPUT;
     //bit mask of the pins that you want to set,e.g.GPIO21/32
@@ -505,7 +520,7 @@ void initialize_pins (void) {
     gpio_set_level(GPIO_OUTPUT_CONNECTED_LED, 1);
     gpio_set_level(GPIO_OUTPUT_ACCESS_LED, 1);
     gpio_set_level(GPIO_OUTPUT_FAIL_LED, 1);
-    vTaskDelay(500 / portTICK_RATE_MS);
+    vTaskDelay(500 / portTICK_PERIOD_MS);
     gpio_set_level(GPIO_OUTPUT_CONNECTED_LED, 0);
     gpio_set_level(GPIO_OUTPUT_ACCESS_LED, 0);
     gpio_set_level(GPIO_OUTPUT_FAIL_LED, 0);
@@ -514,15 +529,15 @@ void initialize_pins (void) {
 static void strobe_leds (void *pvParameters) {
     while (1) {
         gpio_set_level(GPIO_OUTPUT_CONNECTED_LED, 1);
-        vTaskDelay(200 / portTICK_RATE_MS);
+        vTaskDelay(200 / portTICK_PERIOD_MS);
         gpio_set_level(GPIO_OUTPUT_CONNECTED_LED, 0);
         gpio_set_level(GPIO_OUTPUT_ACCESS_LED, 1);
-        vTaskDelay(200 / portTICK_RATE_MS);
+        vTaskDelay(200 / portTICK_PERIOD_MS);
         gpio_set_level(GPIO_OUTPUT_ACCESS_LED, 0);
         gpio_set_level(GPIO_OUTPUT_FAIL_LED, 1);
-        vTaskDelay(200 / portTICK_RATE_MS);
+        vTaskDelay(200 / portTICK_PERIOD_MS);
         gpio_set_level(GPIO_OUTPUT_FAIL_LED, 0);
-        vTaskDelay(200 / portTICK_RATE_MS);
+        vTaskDelay(200 / portTICK_PERIOD_MS);
     }
 }
 
@@ -545,7 +560,7 @@ static void check_gpio0 (void *pvParameters) {
             }
         }
         last_level = new_level;
-        vTaskDelay(100 / portTICK_RATE_MS);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
     }
 }
 
@@ -803,7 +818,7 @@ int read_acl () {
         ESP_LOGI(TAG, "New ACL successfully cached %d entries", cnt);
         free_acls(old_acl_cache);
         acl_loaded = true;
-        ESP_LOGI(TAG, "Heap size = %d", xPortGetFreeHeapSize());
+        ESP_LOGI(TAG, "Heap size = %d", (int) xPortGetFreeHeapSize());
         return (true);
     } else if ((err == 0) && (cnt == 0)) {
         ESP_LOGE(TAG, "http read returned no valid ACLs");
@@ -820,7 +835,7 @@ int read_acl () {
         acl_loaded = old_acl_loaded;
         blinkit_low(GPIO_OUTPUT_CONNECTED_LED, 7, 250);
     }
-    ESP_LOGI(TAG, "Heap size = %d", xPortGetFreeHeapSize());
+    ESP_LOGI(TAG, "Heap size = %d", (int) xPortGetFreeHeapSize());
     return (false);
 }
 
@@ -957,7 +972,7 @@ static void rfid_main_loop (void *pvParameters)
 
                 if (wificonfig_vals_rfid.moment) {
                     // Momentary
-                    vTaskDelay(wificonfig_vals_rfid.mtime * 1000 / portTICK_RATE_MS);
+                    vTaskDelay(wificonfig_vals_rfid.mtime * 1000 / portTICK_PERIOD_MS);
                     ESP_LOGI (TAG, "Turning off relay power");
                     no_rfid_sequence();
                     access_state = 0;
@@ -965,7 +980,7 @@ static void rfid_main_loop (void *pvParameters)
                 } else {
                     // wait for IN_RANGE signal to drop
                     while (gpio_get_level(GPIO_INPUT_IN_RANGE)) {
-                        vTaskDelay(RANGE_CHECK_TIME / portTICK_RATE_MS);
+                        vTaskDelay(RANGE_CHECK_TIME / portTICK_PERIOD_MS);
                     }
                     ESP_LOGI (TAG, "In Range signal dropped");
                     ESP_LOGI (TAG, "Turning off relay power and logging");
@@ -993,7 +1008,7 @@ static void rfid_main_loop (void *pvParameters)
 
        // chill for 100 mSec
        //
-       vTaskDelay(100 / portTICK_RATE_MS);
+       vTaskDelay(100 / portTICK_PERIOD_MS);
     }
 }
 
@@ -1004,10 +1019,10 @@ static void update_loop (void *pvParameters) {
     while (1) {
         if (wificonfig_vals_mqtt.update != 0) {
             publish_status ("STATE", access_state, true);
-            vTaskDelay((60000 * wificonfig_vals_mqtt.update) / portTICK_RATE_MS);
+            vTaskDelay((60000 * wificonfig_vals_mqtt.update) / portTICK_PERIOD_MS);
         } else {
             // paranoia (should never get here)
-            vTaskDelay(60000 / portTICK_RATE_MS);
+            vTaskDelay(60000 / portTICK_PERIOD_MS);
         }
     }
 }

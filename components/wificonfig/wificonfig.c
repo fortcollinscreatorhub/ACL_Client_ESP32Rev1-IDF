@@ -7,14 +7,15 @@ Allows configuration of a device over wifi
 #include <string.h>
 #include <esp_log.h>
 #include <esp_system.h>
-#include <esp_wifi.h>
-#include <esp_event.h>
-#include <nvs_flash.h>
-#include <nvs.h>
-#include <esp_netif.h>
-#include <esp_eth.h>
+#include "esp_wifi.h"
+#include "esp_mac.h"
+#include "esp_event.h"
+#include "nvs_flash.h"
+#include "nvs.h"
+#include "esp_netif.h"
+#include "esp_eth.h"
 
-#include <esp_http_server.h>
+#include "esp_http_server.h"
 
 #include <sys/param.h>
 
@@ -30,7 +31,7 @@ Allows configuration of a device over wifi
  * handlers for the web server.
  */
 
-#define WIFI_SSID     "ESP32"
+#define WIFI_SSID     "RFID-AP"
 #define WIFI_PASS     ""
 #define MAX_STA_CONN  4
 #define DEFAULT_SCAN_LIST_SIZE 10
@@ -960,7 +961,7 @@ static esp_err_t restart_get_handler(httpd_req_t *req)
     httpd_resp_send_chunk (req, NULL, 0);
 
     // wait two seconds before resetting so page can be served up
-    vTaskDelay(2000 / portTICK_RATE_MS);
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
 
     esp_restart();
 }
@@ -1293,7 +1294,7 @@ esp_err_t wificonfig(void)
 
     // wait forever until restart
     while (1) {
-        vTaskDelay(100 / portTICK_RATE_MS);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
     }
     return (ESP_OK);
 }
